@@ -305,9 +305,6 @@ public:
 		bool found = false;
 		PageDescriptor *pg; // first page descriptor pointer
 
-		// mm_log.messagef(LogLevel::DEBUG, "PageDescriptor to be allocated pgd=%p", pgd);
-		// mm_log.messagef(LogLevel::DEBUG, "PageDescriptor to be allocated pd=%p, nr=0x%lx", page_descriptors, nr_page_descriptors);
-
 		while (order >= 0 && !found) {
 			pg = _free_areas[order];
 			// mm_log.messagef(LogLevel::DEBUG, "order=%d, pg=%p", order, pg);
@@ -337,43 +334,47 @@ public:
 
 		if (!found)		return false; // pgd not allocated in the free area list for all order
 
-		// mm_log.messagef(LogLevel::DEBUG, "block pointer to page=%p at order=%d", pg, order);
-		// pg points to the first page of the block containing the pgd page
-		// order wil be the current order containing the block
 		PageDescriptor **block_pointer = &pg;
-		// mm_log.messagef(LogLevel::DEBUG, "block pointer=%p", *block_pointer);
-		// split_block(block_pointer, order);
-		// mm_log.messagef(LogLevel::DEBUG, "splitted");
-
 		while (order >= 0) {
 			if (order == 0)	{
 				// *block_pointer == pgd
 				PageDescriptor *pgd_next_pg = pgd->next_free;
-				PageDescriptor *pgd_prev_pg = pgd-1;
-				// mm_log.messagef(LogLevel::DEBUG, "pgd=%p | *block_pointer=%p | pgd_next_pg=%p | pgd_prev_pg=%p",pgd, *block_pointer, pgd_next_pg, pgd_prev_pg);
-				pgd_prev_pg[0].next_free = pgd_next_pg;
-				pgd[0].next_free = _free_areas[0];
-				_free_areas[0] = pgd;
-				alloc_pages(0);
+				PageDescriptor *pgd_prev_pg;
+				PageDescriptor *prev_base;
+				PageDescriptor *base = _free_areas[0];
+				while (base) {
+					if (base < pgd) {
+						prev_base = base;
+						base = base -> next_free;
+					} else {
+						break;
+					}
+				} // the base return should be the pgd!, prev_base will be the previous page!
+				if (pgd_prev_pg && pgd_next_pg) { // if there is a next page, need to point it from the previous page
+					pgd_prev_pg[0].next_free = pgd_next_pg;
+					pdg[0].next_free = _free_areas[0];
+					_free_areas[0] = pgd;
+				}
+				else if (pgd_prev_pg) {
+					pgd_prev_pg[0].next_free = NULL;
+					pgd[0].next_free = _free_areas[0];
+					_free_areas[0] = pgd;
+				}
+
+				PageDescriptor *allocated_page = alloc_pages(0);
 				return true;
 			}	 // individual block = individual page = pgd
+
 			int target_order = order-1;
 			uint64_t page_per_block = pages_per_block(target_order);
 			PageDescriptor *splitted_left = split_block(block_pointer, order);
-			// mm_log.messagef(LogLevel::DEBUG, " ============================ %d =================", order);
 			PageDescriptor *splitted_right = splitted_left + page_per_block;
-			// mm_log.messagef(LogLevel::DEBUG, "splitted_left=%p | splitted_right=%p", splitted_left, splitted_right);
-
 			order--;
-			// mm_log.messagef(LogLevel::DEBUG, " ============================ %d =================", order);
 
-			if (order == 0) 	return true;
-			if (pgd >= splitted_right) {
-				// mm_log.messagef(LogLevel::DEBUG, "search right block");
-				block_pointer = &splitted_right;
-			} else {
-				// mm_log.messagef(LogLevel::DEBUG, "search left block");
-				block_pointer = &splitted_left;
+			if (order != 0 && pgd >= splitted_right) {
+				*block_pointer = splitted_right;
+			} else if (order != 0){
+				*block_pointer = splitted_left;
 			}
 		}
 	}
@@ -388,8 +389,6 @@ public:
 
 		// TODO: Initialise the free area linked list for the maximum order
 		// to initialise the allocation algorithm.
-
-		// not_implemented();
 
 		// NOTE: (from piazza) the no of pages will never be less than the block size of the max order (16)
 		uint64_t nr_pgd_per_block = pages_per_block(MAX_ORDER-1); // max no of page descriptors for order-16 == 65536 pages per block
