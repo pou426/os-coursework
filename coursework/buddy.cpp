@@ -226,36 +226,32 @@ public:
 	 */
 	PageDescriptor *alloc_pages(int order) override
 	{
-		// not_implemented();
-		if (order >= MAX_ORDER) {
+		if (order >= MAX_ORDER) { // orders are in range 0 to 16 (inclusive)
 			return NULL;
 		}
 
-		PageDescriptor *pgd = _free_areas[order];
+		PageDescriptor *pgd = _free_areas[order]; // pointer to first page descriptor is the highest order list (order-16)
 		if (pgd) { // if pgd exists
-			remove_block(pgd, order);
+			remove_block(pgd, order); // returns first block from order-16's list
 			return pgd;
 		}
 
-		int higher_order = order + 1;
+		int higher_order = order + 1; // search from higher orders
 		PageDescriptor *left; // splitted left block
-		while (true) {
-			if (higher_order >= MAX_ORDER) { // runs out of higher order blocks, no available pages
-				return NULL;
-			}
+		while (higher_order < MAX_ORDER) { // orders has to equal 16 or below
 			if (higher_order == order) {
 				remove_block(left, order);
 				return left;
 			}
-			if (_free_areas[higher_order]) {
+			if (_free_areas[higher_order]) { // if there is a block to split
 				PageDescriptor **block_pointer = &_free_areas[higher_order];
 				left = split_block(block_pointer, higher_order);
 				higher_order--;
-			} else {
+			} else { // search from one order above
 				higher_order++;
 			}
 		}
-
+		return NULL; // higher_order becomes 17, which is out of range, no pages available
 	}
 
 	/**
@@ -265,7 +261,7 @@ public:
 	 */
 	void free_pages(PageDescriptor *pgd, int order) override
 	{
-		if (order >= MAX_ORDER) {
+		if (order >= MAX_ORDER) { // orders are in range 0 to 16 (inclusive)
 			return;
 		}
 		// Make sure that the incoming page descriptor is correctly aligned
@@ -273,13 +269,12 @@ public:
 		// illegal to free page 1 in order-1.
 		assert(is_correct_alignment_for_order(pgd, order));
 
-		PageDescriptor **slot = insert_block(pgd, order);
+		PageDescriptor **slot = insert_block(pgd, order); // place block inside the corresponding free area list
 		while (order < MAX_ORDER) {
 			PageDescriptor *buddy = buddy_of(*slot, order);
-			// iterate through the free list of the order and check if the buddy is inside the free list
 			PageDescriptor *pg = _free_areas[order];
 			bool merged = false;
-			while (pg && !merged) {
+			while (pg && !merged) { // iterate through the free list of the order and check if the buddy is inside the free list
 				if (pg==buddy) {
 					PageDescriptor **inserted_block = merge_block(slot, order);
 					slot = inserted_block;
@@ -301,67 +296,41 @@ public:
 	 */
 	bool reserve_page(PageDescriptor *pgd)
 	{
+		assert(pgd);
 		int order = MAX_ORDER-1; // start from the highest order free area list
 		bool found = false;
 		PageDescriptor *pg; // first page descriptor pointer
 
+		pg = _free_areas[order];
+
 		while (order >= 0 && !found) {
 			pg = _free_areas[order];
-			// mm_log.messagef(LogLevel::DEBUG, "order=%d, pg=%p", order, pg);
-			if (pgd < pg) { // while the pgd pointer is numerically smaller than the first pg from the free area list
-				// mm_log.messagef(LogLevel::DEBUG, "pgd < pg");
-				order--; // move to one order lower
-			} else {
-				// mm_log.messagef(LogLevel::DEBUG, "pgd >= pg");
+
+			if (pgd >= pg) { // pgd could be inside this order's free are list, search this list
 				uint64_t nr_page_per_block = pages_per_block(order);
-				// mm_log.messagef(LogLevel::DEBUG, "nr_page_per_block=%d", nr_page_per_block);
 				while (pg && pgd >= pg && !found) {
 					PageDescriptor *last_pg_of_block = &pg[nr_page_per_block];
-					// mm_log.messagef(LogLevel::DEBUG, "last_pg_of_block=%p", last_pg_of_block);
-					if (pg <= pgd && pgd < last_pg_of_block) { // required page in this block
-						// mm_log.messagef(LogLevel::DEBUG, "block has been found");
-						found = true;
-					} else {
-						pg = pg -> next_free; // go to next free block in that order
-					}
+					if (pg <= pgd && pgd < last_pg_of_block)
+						found = true; // required page in this block
+					else
+						pg = pg->next_free;
 				}
+				if (!found)	order--; // pgd not found in that order's free list, move to 1 order below
+			}
 
-				if (!found) { // all page descriptors in that order's free list has been looked at, pgd not found
-					order--; // move to one order lower
-				}
+			else {
+				order--; // pgd not within this order's list, move to 1 order lower
 			}
 		}
 
-		if (!found)		return false; // pgd not allocated in the free area list for all order
+		if (!found)	{
+			return false; // pgd not allocated in the free area list for all order
+		}
 
 		PageDescriptor **block_pointer = &pg;
 		while (order >= 0) {
 			if (order == 0)	{
-				// *block_pointer == pgd
-				PageDescriptor *pgd_next_pg = pgd->next_free;
-				PageDescriptor *pgd_prev_pg;
-				PageDescriptor *prev_base;
-				PageDescriptor *base = _free_areas[0];
-				while (base) {
-					if (base < pgd) {
-						prev_base = base;
-						base = base -> next_free;
-					} else {
-						break;
-					}
-				} // the base return should be the pgd!, prev_base will be the previous page!
-				if (pgd_prev_pg && pgd_next_pg) { // if there is a next page, need to point it from the previous page
-					pgd_prev_pg[0].next_free = pgd_next_pg;
-					pdg[0].next_free = _free_areas[0];
-					_free_areas[0] = pgd;
-				}
-				else if (pgd_prev_pg) {
-					pgd_prev_pg[0].next_free = NULL;
-					pgd[0].next_free = _free_areas[0];
-					_free_areas[0] = pgd;
-				}
-
-				PageDescriptor *allocated_page = alloc_pages(0);
+				remove_block(*block_pointer, 0);
 				return true;
 			}	 // individual block = individual page = pgd
 
@@ -371,12 +340,13 @@ public:
 			PageDescriptor *splitted_right = splitted_left + page_per_block;
 			order--;
 
-			if (order != 0 && pgd >= splitted_right) {
+			if (pgd >= splitted_right) {
 				*block_pointer = splitted_right;
-			} else if (order != 0){
+			} else {
 				*block_pointer = splitted_left;
 			}
 		}
+		return false;
 	}
 
 	/**
@@ -387,10 +357,6 @@ public:
 	{
 		mm_log.messagef(LogLevel::DEBUG, "Buddy Allocator Initialising pd=%p, nr=0x%lx", page_descriptors, nr_page_descriptors);
 
-		// TODO: Initialise the free area linked list for the maximum order
-		// to initialise the allocation algorithm.
-
-		// NOTE: (from piazza) the no of pages will never be less than the block size of the max order (16)
 		uint64_t nr_pgd_per_block = pages_per_block(MAX_ORDER-1); // max no of page descriptors for order-16 == 65536 pages per block
 
 		uint64_t idx = nr_pgd_per_block;
@@ -400,9 +366,6 @@ public:
 		}
 
 		_free_areas[MAX_ORDER-1] = page_descriptors; // assign the first list of free areas for order-16
-
-		PageDescriptor *pg = _free_areas[MAX_ORDER-1];
-
 		return true;
 	}
 
