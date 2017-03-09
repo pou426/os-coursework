@@ -287,6 +287,7 @@ public:
 				return;
 			}
 		}
+		return;
 	}
 
 	/**
@@ -356,6 +357,10 @@ public:
 	bool init(PageDescriptor *page_descriptors, uint64_t nr_page_descriptors) override
 	{
 		mm_log.messagef(LogLevel::DEBUG, "Buddy Allocator Initialising pd=%p, nr=0x%lx", page_descriptors, nr_page_descriptors);
+
+		if (!page_descriptors) { // page_descriptors pointer does not exist
+			return false;
+		}
 
 		uint64_t nr_pgd_per_block = pages_per_block(MAX_ORDER-1); // max no of page descriptors for order-16 == 65536 pages per block
 
