@@ -4,7 +4,7 @@
  */
 
 /*
- * STUDENT NUMBER: s
+ * STUDENT NUMBER: s1330027
  */
 #include "tarfs.h"
 #include <infos/kernel/log.h>
@@ -42,10 +42,10 @@ static inline unsigned int octal2ui(const char *data)
 		// Add the value of the character, multipled by the factor, to
 		// the working value.
 		value += factor * (ch - '0');
-		
+
 		// Increment the factor by multiplying it by eight.
 		factor *= 8;
-		
+
 		// Increment the current character position.
 		i++;
 	}
@@ -54,13 +54,39 @@ static inline unsigned int octal2ui(const char *data)
 	return value;
 }
 
+// helper function - convert bytes to blocks and round up the integer
+static int byte2block(int bytes) {
+	int cap = 0;
+	int block = 0;
+	while (cap < bytes) {
+		cap = cap + 512;
+		block++;
+	}
+	return block;
+}
+
 // The structure that represents the header block present in
 // TAR files.  A header block occurs before every file, this
 // this structure must EXACTLY match the layout as described
 // in the TAR file format description.
 namespace tarfs {
 	struct posix_header {
-		// TO BE FILLED IN
+		char name [100]; // file name of the file, with directory names preceding the file name, separated by slashes
+		char mode [8]; // 9 bits = file permissions; 3 bits = Set UID, Set GID, Save Text modes
+		char uid [8]; // User ID of file owner
+		char gid [8]; // Group ID of file owner
+		char size [12]; // size of file in bytes
+		char mtime [12]; // data modification time of the file at the time it was archived. it is the ASCII representation of the octal value of the last time the file's contents were modified, represented as an integer number of seconds since January 1, 1970, 00:00
+		char chksum [8]; // ASCII representation of the octal value of the simple sum of all bytes in the header block
+		char typeflag; // type of file archieved, 0 = reg file, 5 = directory
+		char linkname [100];
+		char magic [6];
+		char version [2];
+		char uname [32];
+		char gname [32];
+		char devmajor [8];
+		char devminor [8];
+		char prefix [155];
 	} __packed;
 }
 
@@ -76,14 +102,22 @@ int TarFSFile::pread(void* buffer, size_t size, off_t off)
 	if (off >= this->size()) return 0;
 
 	// TO BE FILLED IN
-	
+
 	// buffer is a pointer to the buffer that should receive the data.
 	// size is the amount of data to read from the file.
 	// off is the zero-based offset within the file to start reading from.
-	
+
+	// NOTE: this function is used for reading the data associated with a file. it
+	// reads from a particular offset in the file, for a particular length into the supplied
+	// buffer.
 	return 0;
 }
 
+// --------------------------------------------------------------------------------------------
+//
+// 																	TarFS::build_tree()
+//
+// --------------------------------------------------------------------------------------------
 /**
  * Reads all the file headers in the TAR file, and builds an in-memory
  * representation.
@@ -95,8 +129,169 @@ TarFSNode* TarFS::build_tree()
 	TarFSNode *root = new TarFSNode(NULL, "", *this);
 
 	// TO BE FILLED IN
-	
+
 	// You must read the TAR file, and build a tree of TarFSNodes that represents each file present in the archive.
+
+	// size_t nr_blocks = block_device().block_count(); // nr_blocks = 400
+	// syslog.messagef(LogLevel::DEBUG, "--------------Block Device nr_blocks=%lu", nr_blocks);
+	// int block_size = block_device().block_size(); // block_size = 512
+	// syslog.messagef(LogLevel::DEBUG, "--------------Block Device block_size=%lu", block_size);
+	//
+	// uint8_t *buffer = new uint8_t[block_size*nr_blocks];
+	// block_device().read_blocks(buffer, 0, nr_blocks);
+	// delete buffer;
+
+	int pos = 0; // index number for block in tar file
+	bool done = false; // still got file entries to read
+	while (!done) {
+		// check for the two 0-byte blocks, if exists
+		char *last_two = new char[block_device().block_size() * 2];
+		block_device().read_blocks(last_two, pos, 2);
+		bool isLast = true;
+		for (int i = 0; i < block_device().block_size() * 2; i++) {
+			if (octal2ui(last_two+i) != 0) {
+				isLast = false;
+				break;
+			}
+		}
+		if (isLast) {
+			// syslog.message(LogLevel::DEBUG, "two 0-byte blocks encountered. done");
+			done = true;
+		} else {
+			// read header block
+			posix_header *header = (struct posix_header *) new char[block_device().block_size()];
+			block_device().read_blocks(header, pos, 1);
+			// syslog.messagef(LogLevel::DEBUG, "name=%s, size=%lu, pos=%lu", header->name, byte2block(octal2ui(header->size)), pos);
+
+			// path name
+			String header_name_str = String(header->name);
+			List<String> header_name_split = header_name_str.split('/', true);
+
+			TarFSNode *parent = root;
+			for (const String& name : header_name_split) {
+				TarFSNode *child;
+				if (parent->children().try_get_value(name.get_hash(), child)) {
+					// syslog.message(LogLevel::DEBUG, "child node has been found");
+					parent = child;
+				} else {
+					// syslog.message(LogLevel::DEBUG, "child node not found");
+					TarFSNode *child_node = new TarFSNode(parent, name, *this);
+					child_node->set_block_offset(pos);
+					parent->add_child(name, child_node);
+					parent = child_node;
+				}
+			}
+			pos = pos + 1 + byte2block(octal2ui(header->size));
+		}
+
+	}
+
+
+	// // ------------------------- this prints out all directories and files ----------------------------------
+	// int start = 0;
+	// posix_header *header = (struct posix_header *) new char[block_device().block_size()];
+	// block_device().read_blocks(header, start, 1);
+	// int header_size_bytes = octal2ui(header->size);
+	// int header_size_block = byte2block(header_size_bytes);
+	// syslog.messagef(LogLevel::DEBUG, "name=%s, size=%lu blocks, pos=%lu", header->name, header_size_block, start);
+
+	// // ---------------- typeflag ---------------
+	// bool isDir = false;
+	// char header_typeflag = header->typeflag;
+	// syslog.messagef(LogLevel::DEBUG, "typeflag=%c", header_typeflag);
+	// if (header_typeflag == '5') {
+	// 	isDir = true;
+	// 	syslog.message(LogLevel::DEBUG, "This is a directory");
+	// }
+	//
+	// // ---------------- path name ---------------
+	// char *header_name = header->name;
+	// String header_name_str = String(header_name);
+	// List<String> header_name_split = header_name_str.split('/',true);
+	// int header_name_split_len = header_name_split.count();
+	// for (const String &s : header_name_split) {
+	// 	syslog.messagef(LogLevel::DEBUG, "s=%s", s.c_str());
+	// }
+	//
+	// TarFSNode *parent = root;
+	// for (const String& name : header_name_split) {
+	// 	TarFSNode *child;
+	// 	if (parent->children().try_get_value(name.get_hash(), child)) { // child node not found
+	// 		syslog.message(LogLevel::DEBUG, "child node is found!!!!!!!!!!!!!");
+	// 		parent = child; // set parent to child
+	// 	} else {
+	// 		syslog.message(LogLevel::DEBUG, "child node is not found!!!!!!!!!!!!!");
+	// 		TarFSNode *child_node = new TarFSNode(parent, name, *this);
+	// 		child_node->set_block_offset(start);
+	// 		parent->add_child(name, child_node);
+	// 		parent = child_node;
+	// 	}
+	// }
+	//
+	//
+	// bool done = false;
+	// while (!done) {
+	// 	start = start + 1 + header_size_block;
+	// 	char *last_two = new char[block_device().block_size() * 2];
+	// 	block_device().read_blocks(last_two, start, 2);
+	// 	bool isLast = true;
+	// 	for (int i = 0; i < 1024; i++) {
+	// 		if (octal2ui(last_two+i) != 0) {
+	// 			isLast = false;
+	// 		}
+	// 	}
+	// 	if (isLast) {
+	// 		done = true;
+	// 		break;
+	// 	} else {
+	// 		header = (struct posix_header *) new char[block_device().block_size()];
+	// 		block_device().read_blocks(header, start, 1);
+	// 		header_size_bytes = octal2ui(header->size);
+	// 		header_size_block = byte2block(header_size_bytes);
+	// 		syslog.messagef(LogLevel::DEBUG, "name=%s, size=%lu blocks, pos=%lu", header->name, header_size_block, start);
+	// 		// ------------------ typeflag -----------------
+	// 		isDir = false;
+	// 		char header_typeflag = header->typeflag;
+	// 		syslog.messagef(LogLevel::DEBUG, "typeflag=%c", header_typeflag);
+	// 		if (header_typeflag == '5') {
+	// 			isDir = true;
+	// 			syslog.message(LogLevel::DEBUG, "This is a directory");
+	// 		}
+	// 		// ---------------- path name ---------------
+	// 		header_name = header->name;
+	// 		header_name_str = String(header_name);
+	// 		List<String> header_name_split = header_name_str.split('/',true);
+	// 		header_name_split_len = header_name_split.count();
+	// 		for (const String &s : header_name_split) {
+	// 			syslog.messagef(LogLevel::DEBUG, "s=%s", s.c_str());
+	// 		}
+	//
+	// 		parent = root;
+	// 		for (const String& name : header_name_split) {
+	// 			TarFSNode *child;
+	// 			if (parent->children().try_get_value(name.get_hash(), child)) { // child node not found
+	// 				syslog.message(LogLevel::DEBUG, "child node is found");
+	// 				parent = child; // set parent to child
+	// 			} else {
+	// 				syslog.message(LogLevel::DEBUG, "child node is not found!!!!!!!!!!!!!");
+	// 				TarFSNode *child_node = new TarFSNode(parent, name, *this);
+	// 				child_node->set_block_offset(start);
+	// 				parent->add_child(name, child_node);
+	// 				parent = child_node;
+	// 			}
+	// 		}
+	// 	}
+	// }
+
+
+
+
+	// NOTE: this function is used during mount time to build the tree representation of the file
+	// system. Normally, a file system wouldn't read its entire directory layout into memory, build_tree
+	// for simplicity this is what should be done here
+	//
+	// called at file-system mount time to build the in-memory representation of the file-system tree.
+	// Need to iterate over the TAR file, and build a tere of TarFSNodes
 
 	return root;
 }
@@ -107,6 +302,10 @@ TarFSNode* TarFS::build_tree()
 unsigned int TarFSFile::size() const
 {
 	// TO BE FILLED IN
+
+	// NOTE: this is a ery imple method (a one liner!) that returns the size of the file
+	// representated by the TarFSFile object. you can get the size by interrogating the header
+	// block of the file
 	return 0;
 }
 
@@ -138,10 +337,10 @@ _cur_pos(0)
 {
 	// Allocate storage for the header.
 	_hdr = (struct posix_header *) new char[_owner.block_device().block_size()];
-	
+
 	// Read the header block into the header structure.
 	_owner.block_device().read_blocks(_hdr, _file_start_block, 1);
-	
+
 	// Increment the starting block for file data.
 	_file_start_block++;
 }
@@ -218,7 +417,7 @@ TarFSNode::~TarFSNode()
 
 /**
  * Opens this node for file operations.
- * @return 
+ * @return
  */
 File* TarFSNode::open()
 {
@@ -233,7 +432,7 @@ File* TarFSNode::open()
 
 /**
  * Opens this node for directory operations.
- * @return 
+ * @return
  */
 Directory* TarFSNode::opendir()
 {
@@ -243,7 +442,7 @@ Directory* TarFSNode::opendir()
 /**
  * Attempts to retrieve a child node of the given name.
  * @param name
- * @return 
+ * @return
  */
 PFSNode* TarFSNode::get_child(const String& name)
 {
@@ -262,7 +461,7 @@ PFSNode* TarFSNode::get_child(const String& name)
  * Creates a subdirectory in this node.  This is a read-only file-system,
  * and so this routine does not need to be implemented.
  * @param name
- * @return 
+ * @return
  */
 PFSNode* TarFSNode::mkdir(const String& name)
 {

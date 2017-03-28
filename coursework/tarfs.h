@@ -4,7 +4,7 @@
  */
 
 /*
- * STUDENT NUMBER: s
+ * STUDENT NUMBER: s1330027
  */
 #ifndef TARFS_H
 #define TARFS_H
@@ -19,7 +19,6 @@
 #include <infos/util/string.h>
 #include <infos/util/map.h>
 #include <infos/util/list.h>
-
 namespace tarfs {
 
 	class TarFSNode;
@@ -27,6 +26,11 @@ namespace tarfs {
 
 	struct posix_header;
 
+	// ========================================================
+	//
+	// 											TarFS class
+	//
+	// ========================================================
 	class TarFS : public infos::fs::BlockBasedFilesystem {
 		friend class TarFSNode;
 		friend class TarFSFile;
@@ -44,7 +48,7 @@ namespace tarfs {
 
 	private:
 		TarFSNode *build_tree();
-		
+
 		static bool is_zero_block(const uint8_t *buffer, size_t size = 512) {
 			for (unsigned int i = 0; i < size; i++) {
 				if (buffer[i] != 0) return false;
@@ -56,6 +60,11 @@ namespace tarfs {
 		TarFSNode *_root_node;
 	};
 
+	// ========================================================
+	//
+	// 										TarFSFile class
+	//
+	// ========================================================
 	class TarFSFile : public infos::fs::File {
 	public:
 
@@ -73,7 +82,7 @@ namespace tarfs {
 		}
 
 		void seek(off_t offset, SeekType type) override;
-		
+
 		unsigned int size() const;
 
 	private:
@@ -83,6 +92,11 @@ namespace tarfs {
 		unsigned int _file_start_block, _cur_pos;
 	};
 
+	// ========================================================
+	//
+	// 									TarFSDirectory class
+	//
+	// ========================================================
 	class TarFSDirectory : public infos::fs::Directory {
 	public:
 		TarFSDirectory(TarFSNode& node);
@@ -96,6 +110,11 @@ namespace tarfs {
 		unsigned int _nr_entries, _cur_entry;
 	};
 
+	// ========================================================
+	//
+	// 										TarFSNode class
+	//
+	// ========================================================
 	class TarFSNode : public infos::fs::PFSNode {
 	public:
 		typedef infos::util::Map<infos::util::String::hash_type, TarFSNode *> TarFSNodeMap;
@@ -140,4 +159,3 @@ namespace tarfs {
 }
 
 #endif /* TARFS_H */
-
