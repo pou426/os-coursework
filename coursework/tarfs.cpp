@@ -172,40 +172,28 @@ TarFSNode* TarFS::build_tree()
 		delete last_two;
 
 		if (isLast) { // if 2 0-bytes blocks have been encountered, return
-			// syslog.message(LogLevel::DEBUG, "two 0-byte blocks encountered. done");
-			// done = true;
 			return root;
 		}
 
 		// header block
 		posix_header *header = (struct posix_header *) new char[block_device().block_size()];
 		block_device().read_blocks(header, pos, 1);
-		// syslog.messagef(LogLevel::DEBUG, "name=%s, size=%lu, pos=%lu", header->name, byte2block(octal2ui(header->size)), pos);
 
 		// path name
 		String header_name_str = String(header->name);
-		// syslog.messagef(LogLevel::DEBUG, "path=%s", header_name_str.c_str());
 		List<String> header_name_split = header_name_str.split('/', true); // split by slash
 
 		TarFSNode *parent = root;
-		// syslog.messagef(LogLevel::DEBUG, "current parent=%s", parent->name().c_str());
 		for (const String& name : header_name_split) {
-			// syslog.messagef(LogLevel::DEBUG, "current name=%s", name.c_str());
 			PFSNode *poss_child = parent->get_child(name); // find the child if exists
 			if (poss_child != NULL) { // if child exists, point the current parent to that child
-				// syslog.message(LogLevel::DEBUG, "child node has been found");
 				TarFSNode *child_node = static_cast<TarFSNode *>(parent->get_child(name));
 				parent = child_node;
-				// syslog.messagef(LogLevel::DEBUG, "current parent=%s", parent->name().c_str());
 			} else { // if child does not exist, create a new child and append to the current parent
-				// syslog.message(LogLevel::DEBUG, "child node not found");
 				TarFSNode *child_node = new TarFSNode(parent, name, *this);
 				child_node->set_block_offset(pos); // updates this node with the offset of the block that contains the header of the file that this node represents
-				// syslog.messagef(LogLevel::DEBUG, "set_block_offset=%lu",pos);
 				parent->add_child(name, child_node);
-				// syslog.messagef(LogLevel::DEBUG, "added child_node=%s to parent=%s", child_node->name().c_str(),parent->name().c_str());
 				parent = root; // reset parent back to root for further searching
-				// syslog.messagef(LogLevel::DEBUG, "current parent=%s", parent->name().c_str());
 			}
 		}
 		pos = pos + 1 + byte2block(octal2ui(header->size)); // set to the position of the header for the next file entry
@@ -224,8 +212,6 @@ TarFSNode* TarFS::build_tree()
 	// 		}
 	// 	}
 	// }
-
-	return root;
 }
 
 /**
@@ -234,7 +220,6 @@ TarFSNode* TarFS::build_tree()
 unsigned int TarFSFile::size() const
 {
 	int file_size_int = octal2ui(_hdr->size);
-	// syslog.messagef(LogLevel::DEBUG, "file size in int = %lu", file_size_int);
 	return file_size_int;
 }
 
