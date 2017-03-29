@@ -101,23 +101,51 @@ int TarFSFile::pread(void* buffer, size_t size, off_t off)
 {
 	if (off >= this->size()) return 0;
 
-// this = TarFS object....
-	int file_start_block = _file_start_block; // remembers which block within the TAR file the file data starts at
-	int curr_pos = _cur_pos;
-
-	int nr_blocks = byte2block(size);
-	int block_size = _owner.block_device().block_size();
-	syslog.messagef(LogLevel::DEBUG, "size=%lu, nr_blocks = %lu", size,nr_blocks);
-	uint8_t *temp_buffer = new uint8_t[block_size*nr_blocks];
-	_owner.block_device().read_blocks(temp_buffer, _file_start_block+1, nr_blocks);
-	buffer = buffer + off;
-	temp_buffer = temp_buffer + off;
-	for (int i = 0; i < size; i++) {
-		buffer = &temp_buffer;
-		buffer = buffer+1;
-		temp_buffer = temp_buffer+1;
+	// _file_start_block : points to the starting block of the data, not the header..
+	int block_size = _owner.block_device().block_size(); // 512 bytes
+	syslog.messagef(LogLevel::DEBUG, "size=%lu, off=%lu",size,off);
+	int nr_bytes_to_read = size+off;
+	syslog.messagef(LogLevel::DEBUG, "nr_bytes_to_read=%lu",nr_bytes_to_read);
+	int nr_blocks_to_read = byte2block(nr_bytes_to_read);
+	syslog.messagef(LogLevel::DEBUG, "nr_blocks_to_read=%lu",nr_blocks_to_read);
+	uint8_t *temp_buffer = new uint8_t[block_size*nr_blocks_to_read]; // read one block at a time
+	for (int i = 0; i < 16; i++) {
+		syslog.messagef(LogLevel::DEBUG, "temp_buffer[%lu]=%lu",i,temp_buffer[i]);
 	}
-	return size;
+	_owner.block_device().read_blocks(temp_buffer, _file_start_block, nr_blocks_to_read);
+	for (int i = 0; i < 16; i++) {
+		syslog.messagef(LogLevel::DEBUG, "temp_buffer[%lu]=%lu",i,temp_buffer[i]);
+	}
+
+	int result = 0;
+	for (int i = off; i < nr_bytes_to_read; i++) {
+		*((uint8_t*)buffer+(i-off)) = (temp_buffer[i]);
+		result++;
+	}
+	for (int i = 0; i < 16; i++) {
+		syslog.messagef(LogLevel::DEBUG, "buffer[%lu]=%lu", i, temp_buffer[i]);
+	}
+	delete temp_buffer;
+	syslog.messagef(LogLevel::DEBUG, "result=%lu", result);
+	return result;
+	// int file_start_block = _file_start_block; // remembers which block within the TAR file the file data starts at
+	// int curr_pos = _cur_pos;
+
+	// int nr_blocks = byte2block(size);
+	// int block_size = _owner.block_device().block_size();
+	// syslog.messagef(LogLevel::DEBUG, "size=%lu, nr_blocks = %lu", size,nr_blocks);
+	// uint8_t *temp_buffer = new uint8_t[block_size*nr_blocks];
+	// _owner.block_device().read_blocks(temp_buffer, _file_start_block+1, nr_blocks);
+	// buffer = buffer + off;
+	// temp_buffer = temp_buffer + off;
+	// for (int i = 0; i < size; i++) {
+	// 	buffer = &temp_buffer;
+	// 	buffer = buffer+1;
+	// 	temp_buffer = temp_buffer+1;
+	// }
+	// return size;
+
+
 	// size_t nr_block = _owner.block_device().block_count(); // u can access the block device by using the _owner field to get at the owning file-system object
 	// syslog.messagef(LogLevel::DEBUG, "hah=%lu", nr_block); // nr_block =400
 	// TO BE FILLED IN
@@ -129,6 +157,17 @@ int TarFSFile::pread(void* buffer, size_t size, off_t off)
 	// NOTE: this function is used for reading the data associated with a file. it
 	// reads from a particular offset in the file, for a particular length into the supplied
 	// buffer.
+
+	// the file data, starting at offset off, and for a length of size must be read from
+	// the archive and placed in the buffer. Note that this method is about reading files - not
+	// reading the archive. Therefore, the offset refers to the offset within the current
+	// file. the skeleton already remembers which block within the TAR file the file data
+	// starts at, and keeps it in the field called _file_start_block
+
+	// u can access the block device by using the _owner field to get at the owning file system
+	// object. e.g.
+	// size_t nr_blocks = _owner.block_device().block_count();
+	// need to take particular care when reading files that span multiple blocks.
 }
 
 // --------------------------------------------------------------------------------------------
@@ -183,12 +222,14 @@ TarFSNode* TarFS::build_tree()
 
 			// path name
 			String header_name_str = String(header->name);
+			syslog.messagef(LogLevel::DEBUG, "path=%s", header_name_str.c_str());
 			List<String> header_name_split = header_name_str.split('/', true);
 
 			TarFSNode *parent = root;
 			syslog.messagef(LogLevel::DEBUG, "current parent=%s", parent->name().c_str());
 			for (const String& name : header_name_split) {
 				// TarFSNode *child;
+				syslog.messagef(LogLevel::DEBUG, "current name=%s", name.c_str());
 				PFSNode *poss_child = parent->get_child(name);
 				if (poss_child != NULL) {
 				// if (parent->children().try_get_value(name.get_hash(), child)) {
@@ -200,7 +241,8 @@ TarFSNode* TarFS::build_tree()
 				} else {
 					syslog.message(LogLevel::DEBUG, "child node not found");
 					TarFSNode *child_node = new TarFSNode(parent, name, *this);
-					child_node->set_block_offset(pos); // updates this node with the offset of the block that contains the header of the file tha this node represents
+					child_node->set_block_offset(pos); // updates this node with the offset of the block that contains the header of the file that this node represents
+					syslog.messagef(LogLevel::DEBUG, "set_block_offset=%lu",pos);
 					parent->add_child(name, child_node);
 					syslog.messagef(LogLevel::DEBUG, "added child_node=%s to parent=%s", child_node->name().c_str(),parent->name().c_str());
 					parent = root;
@@ -330,6 +372,16 @@ TarFSNode* TarFS::build_tree()
 	// called at file-system mount time to build the in-memory representation of the file-system tree.
 	// Need to iterate over the TAR file, and build a tere of TarFSNodes
 
+	for (const auto& child : root->children()) {
+		syslog.messagef(LogLevel::DEBUG, "\t\t%s",child.value->name().c_str());
+		for (const auto& child_child : child.value->children()) {
+			syslog.messagef(LogLevel::DEBUG, "\t\t\t%s",child_child.value->name().c_str());
+			for (const auto& child_child_child : child_child.value->children()) {
+				syslog.messagef(LogLevel::DEBUG, "\t\t\t\t%s",child_child_child.value->name().c_str());
+			}
+		}
+	}
+
 	return root;
 }
 
@@ -338,8 +390,8 @@ TarFSNode* TarFS::build_tree()
  */
 unsigned int TarFSFile::size() const
 {
-	char *file_size = _hdr->size; // TODO: check this
-	int file_size_int = octal2ui(file_size);
+	// char *file_size = _hdr->size; // TODO: check this
+	int file_size_int = octal2ui(_hdr->size);
 	syslog.messagef(LogLevel::DEBUG, "file size in int = %lu", file_size_int);
 	// NOTE: this is a ery imple method (a one liner!) that returns the size of the file
 	// representated by the TarFSFile object. you can get the size by interrogating the header
