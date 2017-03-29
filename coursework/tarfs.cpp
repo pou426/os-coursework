@@ -101,73 +101,90 @@ int TarFSFile::pread(void* buffer, size_t size, off_t off)
 {
 	if (off >= this->size()) return 0;
 
-	// _file_start_block : points to the starting block of the data, not the header..
 	int block_size = _owner.block_device().block_size(); // 512 bytes
-	syslog.messagef(LogLevel::DEBUG, "size=%lu, off=%lu",size,off);
-	int nr_bytes_to_read = size+off;
-	syslog.messagef(LogLevel::DEBUG, "nr_bytes_to_read=%lu",nr_bytes_to_read);
-	int nr_blocks_to_read = byte2block(nr_bytes_to_read);
-	syslog.messagef(LogLevel::DEBUG, "nr_blocks_to_read=%lu",nr_blocks_to_read);
-	uint8_t *temp_buffer = new uint8_t[block_size*nr_blocks_to_read]; // read one block at a time
-	for (int i = 0; i < 16; i++) {
-		syslog.messagef(LogLevel::DEBUG, "temp_buffer[%lu]=%lu",i,temp_buffer[i]);
-	}
-	_owner.block_device().read_blocks(temp_buffer, _file_start_block, nr_blocks_to_read);
-	for (int i = 0; i < 16; i++) {
-		syslog.messagef(LogLevel::DEBUG, "temp_buffer[%lu]=%lu",i,temp_buffer[i]);
-	}
+	int ending_index = size+off; // total no. of bytes to be looped through
+	int index = 0; // index to the current byte
+	int curr_block = _file_start_block; // index to the current block
+	syslog.messagef(LogLevel::DEBUG,"curr_block=%lu",curr_block);
+	int buffer_idx = 0;
 
-	int result = 0;
-	for (int i = off; i < nr_bytes_to_read; i++) {
-		*((uint8_t*)buffer+(i-off)) = (temp_buffer[i]);
-		result++;
+	while (index < ending_index) {
+		syslog.messagef(LogLevel::DEBUG,"index=%lu, curr_block=%lu",index,curr_block);
+		int next_index = index + 512;
+		if (index <= off && off < next_index) { // if offset is within this block
+			uint8_t *temp_buffer = new uint8_t[block_size]; // read one block
+			_owner.block_device().read_blocks(temp_buffer, curr_block, 1);
+			if (ending_index < next_index) {
+				for (int i = off-index; i < ending_index-index; i++) {
+					*((uint8_t*)buffer+buffer_idx) = temp_buffer[i];
+					buffer_idx++;
+				}
+			} else {
+				// copy into buffer and increment, starting at offset
+				for (int i = off-index; i < next_index-index; i++) {
+					*((uint8_t*)buffer+buffer_idx) = temp_buffer[i];
+					buffer_idx++;
+				}
+			}
+			delete temp_buffer;
+		}
+		else if (next_index <= off) { // if offset is in the future blocks
+			// do nothing, don't read block
+		}
+		else if (off < index) { // if offset has already been encountered
+			if (ending_index < next_index) { // finish reading in the current block
+				// copy into buffer ending at ending_index
+				uint8_t *temp_buffer = new uint8_t[block_size]; // read one block
+				_owner.block_device().read_blocks(temp_buffer, curr_block, 1);
+				for (int i = 0; i < ending_index-index; i++) {
+					*((uint8_t*)buffer+buffer_idx) = temp_buffer[i];
+					buffer_idx++;
+				}
+				delete temp_buffer;
+			} else {
+				uint8_t *temp_buffer = new uint8_t[block_size]; // read one block
+				_owner.block_device().read_blocks(temp_buffer, curr_block, 1);
+				// copy the whole fucking block inside
+				for (int i = 0; i < next_index-index; i++) {
+					*((uint8_t*)buffer+buffer_idx) = temp_buffer[i];
+					buffer_idx++;
+				}
+				delete temp_buffer;
+			}
+		}
+		index = index + 512;
+		curr_block = curr_block+1;
 	}
-	for (int i = 0; i < 16; i++) {
-		syslog.messagef(LogLevel::DEBUG, "buffer[%lu]=%lu", i, temp_buffer[i]);
-	}
-	delete temp_buffer;
-	syslog.messagef(LogLevel::DEBUG, "result=%lu", result);
-	return result;
-	// int file_start_block = _file_start_block; // remembers which block within the TAR file the file data starts at
-	// int curr_pos = _cur_pos;
+	syslog.messagef(LogLevel::DEBUG, "buffer_idx=%lu", buffer_idx);
+	return buffer_idx;
 
-	// int nr_blocks = byte2block(size);
-	// int block_size = _owner.block_device().block_size();
-	// syslog.messagef(LogLevel::DEBUG, "size=%lu, nr_blocks = %lu", size,nr_blocks);
-	// uint8_t *temp_buffer = new uint8_t[block_size*nr_blocks];
-	// _owner.block_device().read_blocks(temp_buffer, _file_start_block+1, nr_blocks);
-	// buffer = buffer + off;
-	// temp_buffer = temp_buffer + off;
-	// for (int i = 0; i < size; i++) {
-	// 	buffer = &temp_buffer;
-	// 	buffer = buffer+1;
-	// 	temp_buffer = temp_buffer+1;
+	// // _file_start_block : points to the starting block of the data, not the header..
+	// int block_size = _owner.block_device().block_size(); // 512 bytes
+	// syslog.messagef(LogLevel::DEBUG, "size=%lu, off=%lu",size,off);
+	// int nr_bytes_to_read = size+off;
+	// syslog.messagef(LogLevel::DEBUG, "nr_bytes_to_read=%lu",nr_bytes_to_read);
+	// int nr_blocks_to_read = byte2block(nr_bytes_to_read);
+	// syslog.messagef(LogLevel::DEBUG, "nr_blocks_to_read=%lu",nr_blocks_to_read);
+	// uint8_t *temp_buffer = new uint8_t[block_size*nr_blocks_to_read]; // read one block at a time
+	// // for (int i = 0; i < 16; i++) {
+	// // 	syslog.messagef(LogLevel::DEBUG, "temp_buffer[%lu]=%lu",i,temp_buffer[i]);
+	// // }
+	// _owner.block_device().read_blocks(temp_buffer, _file_start_block, nr_blocks_to_read);
+	// // for (int i = 0; i < 16; i++) {
+	// // 	syslog.messagef(LogLevel::DEBUG, "temp_buffer[%lu]=%lu",i,temp_buffer[i]);
+	// // }
+	// //
+	// int result = 0;
+	// for (int i = off; i < nr_bytes_to_read; i++) {
+	// 	*((uint8_t*)buffer+(i-off)) = (temp_buffer[i]);
+	// 	result++;
 	// }
-	// return size;
-
-
-	// size_t nr_block = _owner.block_device().block_count(); // u can access the block device by using the _owner field to get at the owning file-system object
-	// syslog.messagef(LogLevel::DEBUG, "hah=%lu", nr_block); // nr_block =400
-	// TO BE FILLED IN
-
-	// buffer is a pointer to the buffer that should receive the data.
-	// size is the amount of data to read from the file.
-	// off is the zero-based offset within the file to start reading from.
-
-	// NOTE: this function is used for reading the data associated with a file. it
-	// reads from a particular offset in the file, for a particular length into the supplied
-	// buffer.
-
-	// the file data, starting at offset off, and for a length of size must be read from
-	// the archive and placed in the buffer. Note that this method is about reading files - not
-	// reading the archive. Therefore, the offset refers to the offset within the current
-	// file. the skeleton already remembers which block within the TAR file the file data
-	// starts at, and keeps it in the field called _file_start_block
-
-	// u can access the block device by using the _owner field to get at the owning file system
-	// object. e.g.
-	// size_t nr_blocks = _owner.block_device().block_count();
-	// need to take particular care when reading files that span multiple blocks.
+	// // for (int i = 0; i < 16; i++) {
+	// // 	syslog.messagef(LogLevel::DEBUG, "buffer[%lu]=%lu", i, temp_buffer[i]);
+	// // }
+	// delete temp_buffer;
+	// syslog.messagef(LogLevel::DEBUG, "result=%lu", result);
+	// return result;
 }
 
 // --------------------------------------------------------------------------------------------
