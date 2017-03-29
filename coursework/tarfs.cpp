@@ -188,15 +188,19 @@ TarFSNode* TarFS::build_tree()
 			TarFSNode *parent = root;
 			syslog.messagef(LogLevel::DEBUG, "current parent=%s", parent->name().c_str());
 			for (const String& name : header_name_split) {
-				TarFSNode *child;
-				if (parent->children().try_get_value(name.get_hash(), child)) {
+				// TarFSNode *child;
+				PFSNode *poss_child = parent->get_child(name);
+				if (poss_child != NULL) {
+				// if (parent->children().try_get_value(name.get_hash(), child)) {
 					syslog.message(LogLevel::DEBUG, "child node has been found");
-					parent = child;
+					TarFSNode *child_node = static_cast<TarFSNode *>(parent->get_child(name));
+					// parent = child;
+					parent = child_node;
 					syslog.messagef(LogLevel::DEBUG, "current parent=%s", parent->name().c_str());
 				} else {
 					syslog.message(LogLevel::DEBUG, "child node not found");
 					TarFSNode *child_node = new TarFSNode(parent, name, *this);
-					child_node->set_block_offset(pos);
+					child_node->set_block_offset(pos); // updates this node with the offset of the block that contains the header of the file tha this node represents
 					parent->add_child(name, child_node);
 					syslog.messagef(LogLevel::DEBUG, "added child_node=%s to parent=%s", child_node->name().c_str(),parent->name().c_str());
 					parent = root;
