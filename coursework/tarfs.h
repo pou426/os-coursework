@@ -85,10 +85,6 @@ namespace tarfs {
 
 		unsigned int size() const;
 
-		posix_header* get_header() {
-			return _hdr;
-		}
-
 	private:
 		struct posix_header *_hdr;
 

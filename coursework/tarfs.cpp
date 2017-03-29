@@ -71,14 +71,13 @@ static int byte2block(int bytes) {
 // in the TAR file format description.
 namespace tarfs {
 	struct posix_header {
-		char name [100]; // file name of the file, with directory names preceding the file name, separated by slashes
-		char mode [8]; // 9 bits = file permissions; 3 bits = Set UID, Set GID, Save Text modes
-		char uid [8]; // User ID of file owner
-		char gid [8]; // Group ID of file owner
-		char size [12]; // size of file in bytes
-		char mtime [12]; // data modification time of the file at the time it was archived. it is the ASCII representation of the octal value of the last time the file's contents were modified, represented as an integer number of seconds since January 1, 1970, 00:00
-		char chksum [8]; // ASCII representation of the octal value of the simple sum of all bytes in the header block
-		char typeflag; // type of file archieved, 0 = reg file, 5 = directory
+		char name [100]; // name of file entry
+		char mode [8];
+		char uid [8];
+		char gid [8];
+		char size [12]; // size of file data (excluding header block)
+		char mtime [12];
+		char typeflag; // == '5' for directory, '0' for regular file
 		char linkname [100];
 		char magic [6];
 		char version [2];
@@ -102,96 +101,50 @@ int TarFSFile::pread(void* buffer, size_t size, off_t off)
 	if (off >= this->size()) return 0;
 
 	int block_size = _owner.block_device().block_size(); // 512 bytes
-	int ending_index = size+off; // total no. of bytes to be looped through
 	int index = 0; // index to the current byte
+	int ending_index = size+off; // = total no. of bytes to be looped through
 	int curr_block = _file_start_block; // index to the current block
-	syslog.messagef(LogLevel::DEBUG,"curr_block=%lu",curr_block);
-	int buffer_idx = 0;
+	int buffer_idx = 0; // index to increment the buffer pointer = no. of bytes read
 
-	while (index < ending_index) {
-		syslog.messagef(LogLevel::DEBUG,"index=%lu, curr_block=%lu",index,curr_block);
+	while (index < ending_index) { // read all required data bytes
 		int next_index = index + 512;
+
+		int start_index; // while copying content from temp_buffer into buffer,we have to consider
+		int last_index; // which byte to start and which byte to end according to offset and size parameters
+
+		// start_index:
 		if (index <= off && off < next_index) { // if offset is within this block
-			uint8_t *temp_buffer = new uint8_t[block_size]; // read one block
-			_owner.block_device().read_blocks(temp_buffer, curr_block, 1);
-			if (ending_index < next_index) {
-				for (int i = off-index; i < ending_index-index; i++) {
-					*((uint8_t*)buffer+buffer_idx) = temp_buffer[i];
-					buffer_idx++;
-				}
-			} else {
-				// copy into buffer and increment, starting at offset
-				for (int i = off-index; i < next_index-index; i++) {
-					*((uint8_t*)buffer+buffer_idx) = temp_buffer[i];
-					buffer_idx++;
-				}
+			start_index = off-index;
+		} else if (off < index) { // offset has been encountered
+			start_index = 0;
+		}
+
+		// last_index:
+		if (ending_index < next_index) { // finish reading within this block
+			last_index = ending_index-index;
+		} else {
+			last_index = next_index-index; // should read the whole block
+		}
+
+		if (next_index <= off) { // if offset is in the future block
+			// do nothing
+		} else { // copy content from temp_buffer to buffer
+			uint8_t *temp_buffer = new uint8_t[block_size];
+			_owner.block_device().read_blocks(temp_buffer, curr_block, 1); // read the current block
+			for (int i = start_index; i < last_index; i++) {
+				*((uint8_t*)buffer+buffer_idx) = temp_buffer[i]; // write data into buffer
+				buffer_idx++;
 			}
 			delete temp_buffer;
 		}
-		else if (next_index <= off) { // if offset is in the future blocks
-			// do nothing, don't read block
-		}
-		else if (off < index) { // if offset has already been encountered
-			if (ending_index < next_index) { // finish reading in the current block
-				// copy into buffer ending at ending_index
-				uint8_t *temp_buffer = new uint8_t[block_size]; // read one block
-				_owner.block_device().read_blocks(temp_buffer, curr_block, 1);
-				for (int i = 0; i < ending_index-index; i++) {
-					*((uint8_t*)buffer+buffer_idx) = temp_buffer[i];
-					buffer_idx++;
-				}
-				delete temp_buffer;
-			} else {
-				uint8_t *temp_buffer = new uint8_t[block_size]; // read one block
-				_owner.block_device().read_blocks(temp_buffer, curr_block, 1);
-				// copy the whole fucking block inside
-				for (int i = 0; i < next_index-index; i++) {
-					*((uint8_t*)buffer+buffer_idx) = temp_buffer[i];
-					buffer_idx++;
-				}
-				delete temp_buffer;
-			}
-		}
-		index = index + 512;
-		curr_block = curr_block+1;
-	}
-	syslog.messagef(LogLevel::DEBUG, "buffer_idx=%lu", buffer_idx);
-	return buffer_idx;
 
-	// // _file_start_block : points to the starting block of the data, not the header..
-	// int block_size = _owner.block_device().block_size(); // 512 bytes
-	// syslog.messagef(LogLevel::DEBUG, "size=%lu, off=%lu",size,off);
-	// int nr_bytes_to_read = size+off;
-	// syslog.messagef(LogLevel::DEBUG, "nr_bytes_to_read=%lu",nr_bytes_to_read);
-	// int nr_blocks_to_read = byte2block(nr_bytes_to_read);
-	// syslog.messagef(LogLevel::DEBUG, "nr_blocks_to_read=%lu",nr_blocks_to_read);
-	// uint8_t *temp_buffer = new uint8_t[block_size*nr_blocks_to_read]; // read one block at a time
-	// // for (int i = 0; i < 16; i++) {
-	// // 	syslog.messagef(LogLevel::DEBUG, "temp_buffer[%lu]=%lu",i,temp_buffer[i]);
-	// // }
-	// _owner.block_device().read_blocks(temp_buffer, _file_start_block, nr_blocks_to_read);
-	// // for (int i = 0; i < 16; i++) {
-	// // 	syslog.messagef(LogLevel::DEBUG, "temp_buffer[%lu]=%lu",i,temp_buffer[i]);
-	// // }
-	// //
-	// int result = 0;
-	// for (int i = off; i < nr_bytes_to_read; i++) {
-	// 	*((uint8_t*)buffer+(i-off)) = (temp_buffer[i]);
-	// 	result++;
-	// }
-	// // for (int i = 0; i < 16; i++) {
-	// // 	syslog.messagef(LogLevel::DEBUG, "buffer[%lu]=%lu", i, temp_buffer[i]);
-	// // }
-	// delete temp_buffer;
-	// syslog.messagef(LogLevel::DEBUG, "result=%lu", result);
-	// return result;
+		index = next_index;
+		curr_block++;
+	}
+
+	return buffer_idx;
 }
 
-// --------------------------------------------------------------------------------------------
-//
-// 																	TarFS::build_tree()
-//
-// --------------------------------------------------------------------------------------------
 /**
  * Reads all the file headers in the TAR file, and builds an in-memory
  * representation.
@@ -202,202 +155,75 @@ TarFSNode* TarFS::build_tree()
 	// Create the root node.
 	TarFSNode *root = new TarFSNode(NULL, "", *this);
 
-	// TO BE FILLED IN
-
-	// You must read the TAR file, and build a tree of TarFSNodes that represents each file present in the archive.
-
-	// size_t nr_blocks = block_device().block_count(); // nr_blocks = 400
-	// syslog.messagef(LogLevel::DEBUG, "--------------Block Device nr_blocks=%lu", nr_blocks);
-	// int block_size = block_device().block_size(); // block_size = 512
-	// syslog.messagef(LogLevel::DEBUG, "--------------Block Device block_size=%lu", block_size);
-	//
-	// uint8_t *buffer = new uint8_t[block_size*nr_blocks];
-	// block_device().read_blocks(buffer, 0, nr_blocks);
-	// delete buffer;
-
-	int pos = 0; // index number for block in tar file
+	int pos = 0; // index number for header block in tar file
 	bool done = false; // still got file entries to read
-	while (!done) {
+	while (true) {
+
 		// check for the two 0-byte blocks, if exists
 		char *last_two = new char[block_device().block_size() * 2];
-		block_device().read_blocks(last_two, pos, 2);
+		block_device().read_blocks(last_two, pos, 2); // read 2 blocks
 		bool isLast = true;
 		for (int i = 0; i < (block_device().block_size()*2); i++) {
-			if (octal2ui(last_two+i) != 0) {
+			if (octal2ui(last_two+i) != 0) { // if the byte != 0, they are not the ending blocks
 				isLast = false;
 				break;
 			}
 		}
-		if (isLast) {
-			syslog.message(LogLevel::DEBUG, "two 0-byte blocks encountered. done");
-			done = true;
-		} else {
-			// read header block
-			posix_header *header = (struct posix_header *) new char[block_device().block_size()];
-			block_device().read_blocks(header, pos, 1);
-			syslog.messagef(LogLevel::DEBUG, "name=%s, size=%lu, pos=%lu", header->name, byte2block(octal2ui(header->size)), pos);
+		delete last_two;
 
-			// path name
-			String header_name_str = String(header->name);
-			syslog.messagef(LogLevel::DEBUG, "path=%s", header_name_str.c_str());
-			List<String> header_name_split = header_name_str.split('/', true);
-
-			TarFSNode *parent = root;
-			syslog.messagef(LogLevel::DEBUG, "current parent=%s", parent->name().c_str());
-			for (const String& name : header_name_split) {
-				// TarFSNode *child;
-				syslog.messagef(LogLevel::DEBUG, "current name=%s", name.c_str());
-				PFSNode *poss_child = parent->get_child(name);
-				if (poss_child != NULL) {
-				// if (parent->children().try_get_value(name.get_hash(), child)) {
-					syslog.message(LogLevel::DEBUG, "child node has been found");
-					TarFSNode *child_node = static_cast<TarFSNode *>(parent->get_child(name));
-					// parent = child;
-					parent = child_node;
-					syslog.messagef(LogLevel::DEBUG, "current parent=%s", parent->name().c_str());
-				} else {
-					syslog.message(LogLevel::DEBUG, "child node not found");
-					TarFSNode *child_node = new TarFSNode(parent, name, *this);
-					child_node->set_block_offset(pos); // updates this node with the offset of the block that contains the header of the file that this node represents
-					syslog.messagef(LogLevel::DEBUG, "set_block_offset=%lu",pos);
-					parent->add_child(name, child_node);
-					syslog.messagef(LogLevel::DEBUG, "added child_node=%s to parent=%s", child_node->name().c_str(),parent->name().c_str());
-					parent = root;
-					syslog.messagef(LogLevel::DEBUG, "current parent=%s", parent->name().c_str());
-				}
-			}
-
-			// TarFSNode *parent = root;
-			// for (const String& name : header_name_split) {
-			// 	TarFSNode *child;
-			// 	if (parent->children().try_get_value(name.get_hash(), child)) {
-			// 		// syslog.message(LogLevel::DEBUG, "child node has been found");
-			// 		parent = child;
-			// 	} else {
-			// 		// syslog.message(LogLevel::DEBUG, "child node not found");
-			// 		TarFSNode *child_node = new TarFSNode(parent, name, *this);
-			// 		child_node->set_block_offset(pos);
-			// 		parent->add_child(name, child_node);
-			// 		parent = child_node;
-			// 	}
-			// }
-			pos = pos + 1 + byte2block(octal2ui(header->size));
+		if (isLast) { // if 2 0-bytes blocks have been encountered, return
+			// syslog.message(LogLevel::DEBUG, "two 0-byte blocks encountered. done");
+			// done = true;
+			return root;
 		}
+
+		// header block
+		posix_header *header = (struct posix_header *) new char[block_device().block_size()];
+		block_device().read_blocks(header, pos, 1);
+		// syslog.messagef(LogLevel::DEBUG, "name=%s, size=%lu, pos=%lu", header->name, byte2block(octal2ui(header->size)), pos);
+
+		// path name
+		String header_name_str = String(header->name);
+		// syslog.messagef(LogLevel::DEBUG, "path=%s", header_name_str.c_str());
+		List<String> header_name_split = header_name_str.split('/', true); // split by slash
+
+		TarFSNode *parent = root;
+		// syslog.messagef(LogLevel::DEBUG, "current parent=%s", parent->name().c_str());
+		for (const String& name : header_name_split) {
+			// syslog.messagef(LogLevel::DEBUG, "current name=%s", name.c_str());
+			PFSNode *poss_child = parent->get_child(name); // find the child if exists
+			if (poss_child != NULL) { // if child exists, point the current parent to that child
+				// syslog.message(LogLevel::DEBUG, "child node has been found");
+				TarFSNode *child_node = static_cast<TarFSNode *>(parent->get_child(name));
+				parent = child_node;
+				// syslog.messagef(LogLevel::DEBUG, "current parent=%s", parent->name().c_str());
+			} else { // if child does not exist, create a new child and append to the current parent
+				// syslog.message(LogLevel::DEBUG, "child node not found");
+				TarFSNode *child_node = new TarFSNode(parent, name, *this);
+				child_node->set_block_offset(pos); // updates this node with the offset of the block that contains the header of the file that this node represents
+				// syslog.messagef(LogLevel::DEBUG, "set_block_offset=%lu",pos);
+				parent->add_child(name, child_node);
+				// syslog.messagef(LogLevel::DEBUG, "added child_node=%s to parent=%s", child_node->name().c_str(),parent->name().c_str());
+				parent = root; // reset parent back to root for further searching
+				// syslog.messagef(LogLevel::DEBUG, "current parent=%s", parent->name().c_str());
+			}
+		}
+		pos = pos + 1 + byte2block(octal2ui(header->size)); // set to the position of the header for the next file entry
 	}
 
-
-	// // ------------------------- this prints out all directories and files ----------------------------------
-	// int start = 0;
-	// posix_header *header = (struct posix_header *) new char[block_device().block_size()];
-	// block_device().read_blocks(header, start, 1);
-	// int header_size_bytes = octal2ui(header->size);
-	// int header_size_block = byte2block(header_size_bytes);
-	// syslog.messagef(LogLevel::DEBUG, "name=%s, size=%lu blocks, pos=%lu", header->name, header_size_block, start);
-
-	// // ---------------- typeflag ---------------
-	// bool isDir = false;
-	// char header_typeflag = header->typeflag;
-	// syslog.messagef(LogLevel::DEBUG, "typeflag=%c", header_typeflag);
-	// if (header_typeflag == '5') {
-	// 	isDir = true;
-	// 	syslog.message(LogLevel::DEBUG, "This is a directory");
-	// }
-	//
-	// // ---------------- path name ---------------
-	// char *header_name = header->name;
-	// String header_name_str = String(header_name);
-	// List<String> header_name_split = header_name_str.split('/',true);
-	// int header_name_split_len = header_name_split.count();
-	// for (const String &s : header_name_split) {
-	// 	syslog.messagef(LogLevel::DEBUG, "s=%s", s.c_str());
-	// }
-	//
-	// TarFSNode *parent = root;
-	// for (const String& name : header_name_split) {
-	// 	TarFSNode *child;
-	// 	if (parent->children().try_get_value(name.get_hash(), child)) { // child node not found
-	// 		syslog.message(LogLevel::DEBUG, "child node is found!!!!!!!!!!!!!");
-	// 		parent = child; // set parent to child
-	// 	} else {
-	// 		syslog.message(LogLevel::DEBUG, "child node is not found!!!!!!!!!!!!!");
-	// 		TarFSNode *child_node = new TarFSNode(parent, name, *this);
-	// 		child_node->set_block_offset(start);
-	// 		parent->add_child(name, child_node);
-	// 		parent = child_node;
-	// 	}
-	// }
-	//
-	//
-	// bool done = false;
-	// while (!done) {
-	// 	start = start + 1 + header_size_block;
-	// 	char *last_two = new char[block_device().block_size() * 2];
-	// 	block_device().read_blocks(last_two, start, 2);
-	// 	bool isLast = true;
-	// 	for (int i = 0; i < 1024; i++) {
-	// 		if (octal2ui(last_two+i) != 0) {
-	// 			isLast = false;
-	// 		}
-	// 	}
-	// 	if (isLast) {
-	// 		done = true;
-	// 		break;
-	// 	} else {
-	// 		header = (struct posix_header *) new char[block_device().block_size()];
-	// 		block_device().read_blocks(header, start, 1);
-	// 		header_size_bytes = octal2ui(header->size);
-	// 		header_size_block = byte2block(header_size_bytes);
-	// 		syslog.messagef(LogLevel::DEBUG, "name=%s, size=%lu blocks, pos=%lu", header->name, header_size_block, start);
-	// 		// ------------------ typeflag -----------------
-	// 		isDir = false;
-	// 		char header_typeflag = header->typeflag;
-	// 		syslog.messagef(LogLevel::DEBUG, "typeflag=%c", header_typeflag);
-	// 		if (header_typeflag == '5') {
-	// 			isDir = true;
-	// 			syslog.message(LogLevel::DEBUG, "This is a directory");
-	// 		}
-	// 		// ---------------- path name ---------------
-	// 		header_name = header->name;
-	// 		header_name_str = String(header_name);
-	// 		List<String> header_name_split = header_name_str.split('/',true);
-	// 		header_name_split_len = header_name_split.count();
-	// 		for (const String &s : header_name_split) {
-	// 			syslog.messagef(LogLevel::DEBUG, "s=%s", s.c_str());
-	// 		}
-	//
-	// 		parent = root;
-	// 		for (const String& name : header_name_split) {
-	// 			TarFSNode *child;
-	// 			if (parent->children().try_get_value(name.get_hash(), child)) { // child node not found
-	// 				syslog.message(LogLevel::DEBUG, "child node is found");
-	// 				parent = child; // set parent to child
-	// 			} else {
-	// 				syslog.message(LogLevel::DEBUG, "child node is not found!!!!!!!!!!!!!");
-	// 				TarFSNode *child_node = new TarFSNode(parent, name, *this);
-	// 				child_node->set_block_offset(start);
-	// 				parent->add_child(name, child_node);
-	// 				parent = child_node;
+	// // ---------------- printing the TarFS tree out for checking -------------------
+	// for (const auto& child : root->children()) {
+	// 	syslog.messagef(LogLevel::DEBUG, "\t\t%s",child.value->name().c_str());
+	// 	for (const auto& child_child : child.value->children()) {
+	// 		syslog.messagef(LogLevel::DEBUG, "\t\t\t%s",child_child.value->name().c_str());
+	// 		for (const auto& child_child_child : child_child.value->children()) {
+	// 			syslog.messagef(LogLevel::DEBUG, "\t\t\t\t%s",child_child_child.value->name().c_str());
+	// 			for (const auto& child_child_child_child : child_child_child.value->children()) {
+	// 				syslog.messagef(LogLevel::DEBUG, "\t\t\t\t\t%s",child_child_child_child.value->name().c_str());
 	// 			}
 	// 		}
 	// 	}
 	// }
-
-	// NOTE: this function is used during mount time to build the tree representation of the file
-	// system. Normally, a file system wouldn't read its entire directory layout into memory, build_tree
-	// for simplicity this is what should be done here
-	//
-	// called at file-system mount time to build the in-memory representation of the file-system tree.
-	// Need to iterate over the TAR file, and build a tere of TarFSNodes
-
-	for (const auto& child : root->children()) {
-		syslog.messagef(LogLevel::DEBUG, "\t\t%s",child.value->name().c_str());
-		for (const auto& child_child : child.value->children()) {
-			syslog.messagef(LogLevel::DEBUG, "\t\t\t%s",child_child.value->name().c_str());
-			for (const auto& child_child_child : child_child.value->children()) {
-				syslog.messagef(LogLevel::DEBUG, "\t\t\t\t%s",child_child_child.value->name().c_str());
-			}
-		}
-	}
 
 	return root;
 }
@@ -407,12 +233,8 @@ TarFSNode* TarFS::build_tree()
  */
 unsigned int TarFSFile::size() const
 {
-	// char *file_size = _hdr->size; // TODO: check this
 	int file_size_int = octal2ui(_hdr->size);
-	syslog.messagef(LogLevel::DEBUG, "file size in int = %lu", file_size_int);
-	// NOTE: this is a ery imple method (a one liner!) that returns the size of the file
-	// representated by the TarFSFile object. you can get the size by interrogating the header
-	// block of the file
+	// syslog.messagef(LogLevel::DEBUG, "file size in int = %lu", file_size_int);
 	return file_size_int;
 }
 
