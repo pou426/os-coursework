@@ -100,7 +100,7 @@ int TarFSFile::pread(void* buffer, size_t size, off_t off)
 {
 	if (off >= this->size()) return 0;
 
-	if (off+size > this->size()) { // if trying to read more bytes that the file contains
+	if (off+size > this->size()) { // if trying to read more bytes than the number of bytes the file contains
 		size = this->size() - off;
 	}
 
@@ -160,7 +160,7 @@ TarFSNode* TarFS::build_tree()
 	TarFSNode *root = new TarFSNode(NULL, "", *this);
 
 	int pos = 0; // index number for header block in tar file
-	bool done = false; // still got file entries to read
+
 	while (true) {
 
 		// check for the two 0-byte blocks, if exists
