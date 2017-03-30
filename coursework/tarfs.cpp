@@ -56,6 +56,9 @@ static inline unsigned int octal2ui(const char *data)
 
 // helper function - convert bytes to blocks and round up the integer
 static int byte2block(int bytes) {
+	if (bytes < 0)
+		return 0;
+	
 	int cap = 0;
 	int block = 0;
 	while (cap < bytes) {
