@@ -100,6 +100,10 @@ int TarFSFile::pread(void* buffer, size_t size, off_t off)
 {
 	if (off >= this->size()) return 0;
 
+	if (off+size > this->size()) { // if trying to read more bytes that the file contains
+		size = this->size() - off;
+	}
+
 	int block_size = _owner.block_device().block_size(); // 512 bytes
 	int index = 0; // index to the current byte
 	int ending_index = size+off; // = total no. of bytes to be looped through
